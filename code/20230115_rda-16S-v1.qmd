@@ -1,0 +1,367 @@
+---
+title: "RDA 16S"
+format:
+  html:
+    theme: spacelab
+    toc: true
+    number-sections: true
+    dig16s: 3
+---
+
+```{r}
+pacman::p_load(pacman, here, BiodiversityR, tictoc, tidyverse, V8)
+```
+
+# Load data for RDA 16s      
+
+## Metadata
+### Load Metadata - plant morphology - phenanthrene - qPCR
+```{r Metadata - data sets loading}
+meta.morpho.phe <- read.csv(file = here::here("data","meta.otu.june2020.txt"), dec = ".", header = T, sep = "\t", comment.char = "", row.names = 1) #load
+#meta.morpho.phe$code <- stringr::str_replace_all(meta.morpho.phe$code, '[_]', '.')
+meta.morpho.phe.b.keep <- meta.morpho.phe$compartment == "bulk"
+meta.morpho.phe.r.keep <- meta.morpho.phe$compartment == "rhizo"
+meta.morpho.phe.b <- meta.morpho.phe[meta.morpho.phe.b.keep,]
+meta.morpho.phe.r <- meta.morpho.phe[meta.morpho.phe.r.keep,]
+meta.morpho.phe <- rbind(meta.morpho.phe.b,meta.morpho.phe.r) # keep only bulk and rhizosphere samples
+```
+
+### Recode variables
+```{r Metadata - recode}
+meta.morpho.phe$contamination <- as.factor(meta.morpho.phe$contamination)
+meta.morpho.phe$compartment <- as.factor(meta.morpho.phe$compartment)
+meta.morpho.phe$diversity_status <- as.factor(meta.morpho.phe$diversity_status)
+meta.morpho.phe$diversity_status = factor(meta.morpho.phe$diversity_status, 
+                                      levels = c("O", "C", "N", "E", "CN", "CE", "EN", "CEN"),
+                                      labels = c("BF", "C", "N", "E", "CN", "CE", "EN", "CEN"))
+```
+
+### Keep only needed variables for the rda
+```{r Metadata - keep variables}
+meta.morpho.phe$ver <- NULL
+meta.morpho.phe$col <- NULL
+meta.morpho.phe$nem <- NULL
+meta.morpho.phe$treatment <- NULL
+meta.morpho.phe$cont.comp <- NULL
+meta.morpho.phe$block <- NULL
+meta.morpho.phe$pot.number <- NULL
+meta.morpho.phe$pah.rhd.gp.c <- NULL
+meta.morpho.phe$pah.rhd.gn.c <- NULL
+meta.morpho.phe$branch <- NULL
+meta.morpho.phe$fw_aerial = NULL
+meta.morpho.phe$dw_aerial = NULL
+meta.morpho.phe$dw_root = NULL
+meta.morpho.phe$RSR = NULL
+meta.morpho.phe$height = NULL
+meta.morpho.phe$phe.b = NULL
+meta.morpho.phe$phe.r = NULL
+meta.morpho.phe$phe.total = NULL
+meta.morpho.phe$pah.rhd.gp.b = NULL
+meta.morpho.phe$pah.rhd.gp.r = NULL
+meta.morpho.phe$pah.rhd.gn.b = NULL
+meta.morpho.phe$pah.rhd.gn.r = NULL
+```
+
+
+### Tidy up
+```{r Metadata - tidy up}
+rm(meta.morpho.phe.b)
+rm(meta.morpho.phe.r)
+rm(meta.morpho.phe.b.keep)
+rm(meta.morpho.phe.r.keep)
+```
+
+### Filter out incomplete cases
+```{r filter out incomplete cases}
+meta.morpho.phe <- meta.morpho.phe[complete.cases(meta.morpho.phe), ] # Down from 192 to 188 cases #188?
+```
+
+### Test for autocorrelation of variables
+```{r autocorrelations}
+autocorrelations =  (cor(meta.morpho.phe[, c( 'biomass', 'phe', 'gn.copies.g.soil', 'gp.copies.g.soil')], method = "spearman"))
+```
+
+## 16s
+
+```{r 16s - data sets loading}
+#### ----------------- 16s - General community --------------------------------- 
+raw16s <- read.csv(file = here::here("data", "16s_feature_table_filtered.tsv"), dec = ".", sep = "\t", header = T, row.names = 1, comment.char = "")
+```
+
+### Recode community
+```{r 16s - recode community}
+samplenames <- colnames(raw16s) #  sample names to be changed
+goodsamplenames <- samplenames %-% '[X]'# erase the X added by R 
+goodsamplenames <- stringr::str_replace_all(goodsamplenames, '[.]', '_') # code as in meta.morpho.phe
+goodsamplenames # check did it work?
+colnames(raw16s) <- goodsamplenames #change old colnames for good colnames
+dim(raw16s) #check dimensions: 15192 obs of 192 variables
+```
+
+### Tidy up
+```{r 16s - Tidy intermediate objs}
+rm(goodsamplenames)
+rm(samplenames) # erases junk intermediate data to prevent future problems
+```
+
+# Curing community
+## Taxonomy table
+### Select taxonomy column
+```{r 16s - Curing taxonomy data tables}
+taxonomy.16s <- as.data.frame(raw16s[,ncol(raw16s)]) # taxonomy from last column as independent table
+rownames(taxonomy.16s) <- rownames((raw16s)) # keep ASV numbers
+check.datasets(taxonomy.16s, raw16s) # Check if numbers the same
+rownames(raw16s) <- paste("ASV",rownames(raw16s),sep = "_")# modify ASV names
+rownames(taxonomy.16s) <- paste("ASV",rownames(taxonomy.16s),sep = "_") # modify ASV names
+check.datasets(taxonomy.16s, raw16s) # Check if numbers the same
+```
+
+### Separate taxonomic levels in taxonomy table
+```{r 16s - Curing taxonomy data tables}
+colnames(taxonomy.16s) <- c("Taxonomy") # Rename taxonomy column
+# separate taxonomic groups in variables ----
+tax.clean <- separate(taxonomy.16s, Taxonomy, into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species", "Strain"), sep = ";")
+tax.clean <- tax.clean[,-which(names(tax.clean) %in% c("Species", "Strain"))]
+tax.clean <- as.data.frame(tax.clean)
+as.factor(tax.clean$Domain) # 2 Domain - Archaea and Bacteria : see if there is contamination with chloroplast
+as.factor(tax.clean$Phylum) # 50 Phyla 
+as.factor(tax.clean$Class) # 138 classes
+as.factor(tax.clean$Order) # 347 orders
+as.factor(tax.clean$Family) # 546 Families
+as.factor(tax.clean$Genus) # 1134 genus
+str(tax.clean)
+```
+
+### Eliminate uninformative characters
+```{r 16s - Curing taxonomy data tables}
+# eliminate the characters one by one or all using stringr package -----
+tax.clean$Domain <- stringr::str_replace(tax.clean$Domain,'[k]', '')
+tax.clean$Domain <- stringr::str_replace_all(tax.clean$Domain,'[__]', '')
+tax.clean$Phylum <- stringr::str_replace(tax.clean$Phylum,'[p__]', '')
+tax.clean$Phylum <- stringr::str_replace_all(tax.clean$Phylum,'[__]', '')
+tax.clean$Class <- stringr::str_replace(tax.clean$Class,'[c__]', '')
+tax.clean$Class <- stringr::str_replace_all(tax.clean$Class,'[__]', '')
+tax.clean$Order <- stringr::str_replace(tax.clean$Order, '[o]', '')
+tax.clean$Order <- stringr::str_replace_all(tax.clean$Order, '[__]', '')
+tax.clean$Family <- stringr::str_replace(tax.clean$Family, '[f]', '')
+tax.clean$Family <- stringr::str_replace_all(tax.clean$Family, '[__]', '')
+tax.clean$Genus <- stringr::str_replace(tax.clean$Genus, '[g]','')
+tax.clean$Genus <- stringr::str_replace_all(tax.clean$Genus, '[__]', '')
+str(tax.clean)
+```
+
+### Collate clean tax to community
+```{r 16s - Curing taxonomy data tables}
+# collate otus with clean taxonomy table
+raw16s_bis <- cbind(raw16s[,1:(ncol(raw16s)-1)], tax.clean) # select all columns except last one with unclean tax
+# tyding up
+rm(otuids.16s)
+rm(taxonomy.16s)
+```
+
+## Community  matrix
+### Transpose community matrix
+```{r 16s -  Preparing  abundance matrix, ordering tables}
+tax.clean.16s <- tax.clean # working file for taxonomy
+com16s <- raw16s[,!names(raw16s) %in% c('taxonomy')] # create community table with asv table with only abundances not taxonomy
+com16s.t <- t(com16s) # transposing table, samples as rows, species as columns to match metadata
+```
+### Inner-join with meta.morpho.phe
+Keep community samples that match environmental samples
+```{r}
+com16s.t.filtered <- same.sites(com16s.t, meta.morpho.phe) #Resulting sites without species:  PHE_CEN_4_Rhizo 
+check.datasets(com16s.t.filtered, meta.morpho.phe) # check row names are the same
+```
+
+Erase rows in com16.t.filtered and meta.morpho.phe that do not have species: PHE_CEN_4_Rhizo 
+```{r}
+rows.to.remove = c("PHE_CEN_4_Rhizo")
+dim(com16s.t.filtered) #188 15192
+com16s.t.filtered = com16s.t.filtered[!rownames(com16s.t.filtered) %in% rows.to.remove,]
+dim(com16s.t.filtered) #187 15192
+# Same with environmental data
+meta.morpho.phe = meta.morpho.phe[!rownames(meta.morpho.phe) %in% rows.to.remove,]
+check.datasets(com16s.t.filtered, meta.morpho.phe)
+```
+
+### Transform Hellinger
+```{#r}
+com16s.hell = disttransform(com16s.t.filtered, method = 'hellinger')
+```
+
+# RDA steps
+## Standardize 
+```{r}
+meta.z = meta.morpho.phe |> mutate_if(is.numeric,scale)
+```
+
+## Run RDA model
+```{r}
+#db-RDA Function dbrda does not provide species weights because it uses a distance matrix
+com16s.bray = vegdist(com16s.t.filtered, method = 'bray') # use com16s.t.filtered instead of com16s.hell to match data in PCoA and perMANOVA.
+dbrda.16s = dbrda(com16s.bray ~ contamination + compartment + diversity_status + biomass + phe + gn.copies.g.soil + gp.copies.g.soil, data = meta.z, 
+               scaling = "species")
+RsquareAdj(dbrda.16s)
+anova.rda.16s = anova.cca(dbrda.16s, step = 999, by = "term")
+summary(dbrda.16s)
+capture.output(anova.rda.16s, file = here::here("output", "tables", "16s", "anova-dbrda-16s.txt"))
+capture.output(summary(dbrda.16s), file = here::here("output", "tables", "16s", "summary-dbrda-16s.txt"))
+```
+
+# Ordiplot
+```{r}
+par(mfrow = c(2,2))
+plot.16s.partial = ordiplot(partial.rda.16s, scaling = 2, choices = c(1,2))
+plot.16s.db = ordiplot(dbrda.16s, scaling = 2, choices = c(1,2))
+plot.16s.tb = ordiplot(tbrda.16s, scaling = 2, choices = c(1,2))
+```
+
+## Extract scores for ggplotting
+```{r}
+sites.long3 <- sites.long(plot.16s.db, env.data = meta.morpho.phe)
+tic()
+spec.envfit <- envfit(plot.16s.db, env = com16s.hell, permutations = 1) #Repeat this when at home for 99 permutations for around 20-30 minutes
+toc()
+spec.data.envfit <- data.frame(r = spec.envfit$vectors$r, p = spec.envfit$vectors$pvals)
+species.long2 <- species.long(plot.16s.db, spec.data = spec.data.envfit)
+species.long3 <- species.long2[species.long2$r >= 0.35, ]
+species.long3$labels <- make.cepnames(species.long3$labels)
+dim(species.long3)
+# Which ASVs were retained?
+16s.tax.retained =  merge(tax.clean, species.long3, by = 0)
+
+vectors.envfit <- envfit(plot.16s.db, env = meta.morpho.phe)
+vectors.long3 <- vectorfit.long(vectors.envfit)
+vectors.long3
+
+axis.long3 <- axis.long(dbrda.16s, choices=c(1, 2))
+axis.long3
+
+phe.surface <- ordisurf(plot.16s.db, y = phe)
+phe.surface
+phe.grid <- ordisurfgrid.long(phe.surface)
+
+#biomass <- ordisurf(plot.16s.db, y = biomass)
+#biomass
+#biomass.grid <- ordisurfgrid.long(biomass)
+```
+
+
+## Extract scores for ggplotting
+```{r}
+sites.long3 <- sites.long(plot.16s, env.data = meta.morpho.phe)
+tic()
+spec.envfit <- envfit(plot.16s, env= com16s.hell, permutations=1) #Repeat this when at home for 99 permutations for around 20-30 minutes
+toc()
+spec.data.envfit <- data.frame(r = spec.envfit$vectors$r, p = spec.envfit$vectors$pvals)
+species.long2 <- species.long(plot.16s, spec.data = spec.data.envfit)
+species.long3 <- species.long2[species.long2$r >= 0.35, ]
+species.long3$labels <- make.cepnames(species.long3$labels)
+dim(species.long3)
+# Which ASVs were retained?
+16s.tax.retained =  merge(tax.clean, species.long3, by=0)
+
+vectors.envfit <- envfit(plot.16s, env=meta.morpho.phe)
+vectors.long3 <- vectorfit.long(vectors.envfit)
+vectors.long3
+
+axis.long3 <- axis.long(rda.16s1, choices=c(1, 2))
+axis.long3
+
+phe.surface <- ordisurf(plot.16s, y = phe)
+phe.surface
+phe.grid <- ordisurfgrid.long(phe.surface)
+
+#biomass <- ordisurf(plot.16s, y = biomass)
+#biomass
+#biomass.grid <- ordisurfgrid.long(biomass)
+```
+
+
+# RDA PLOT
+## Create ggplot theme
+```{r}
+BioR.theme <- theme(
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line("gray25", linewidth = 1),
+        text = element_text(size = 10),
+        axis.text = element_text(size = 10, colour = "gray25"),
+        axis.title = element_text(size = 14, colour = "gray25", face = "bold"),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.key = element_blank(),
+        legend.position = "bottom")
+
+```
+
+
+```{r}
+sites.long3$diversity_status = factor(sites.long3$diversity_status, 
+                                      levels = c("O", "C", "N", "E", "CN", "CE", "EN", "CEN"),
+                                      labels = c("BF", "C", "N", "E", "CN", "CE", "EN", "CEN"))
+levels(sites.long3$diversity_status)
+plotgg5 <- ggplot() + 
+    geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+    geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+    xlab(axis.long3[1, "label"]) +
+    ylab(axis.long3[2, "label"]) +  
+    scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+    scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+    #geom_mark_hull(data=sites.long3,  aes(x=axis1, y=axis2, colour=diversity_status,   fill=after_scale(alpha(colour, 0.2))),   concavity=0.1, size=0.2, show.legend=FALSE) +
+    geom_point(data=sites.long3, 
+               aes(x=axis1, y=axis2, color=diversity_status, shape=compartment), 
+               alpha=0.7, size=3) +
+           scale_color_manual(" ", 
+                           values = c( "BF" = "gray77", 
+                                       "C" = "#edf8b1", 
+                                       "E" = "#7fcdbb", 
+                                       "N" = "#c7e9b4",
+                                       "CE" = "#1d91c0", 
+                                       "CN" = "#41b6c4", 
+                                       "EN" = "#225ea8", 
+                                       "CEN" = "#0c2c84"
+                                      ) 
+                           ) +
+    geom_segment(data=species.long3, 
+                 aes(x=0, y=0, xend=axis1*6, yend=axis2*6), 
+                 colour="red", size=0.7, arrow=arrow()) +
+    geom_text_repel(data=species.long3, 
+                    aes(x=axis1*6, y=axis2*6, label=labels),
+                    colour="black") +
+    geom_segment(data=subset(vectors.long3, vector %in% vectors),
+                 aes(x=0, y=0, xend=axis1*1, yend=axis2*1), 
+                 colour="blue", size=0.7, arrow=arrow()) +
+    geom_text_repel(data=subset(vectors.long3, vector %in% vectors), 
+                    aes(x=axis1*1, y=axis2*1, label=vector),
+                    colour="black") +
+    BioR.theme +
+    #ggsci::scale_colour_npg() +
+    labs(shape="compartment", colour="diversity_status", fill="diversity_status") +
+    coord_fixed(ratio=1)
+plotgg5
+
+# Keep only: gp, gn, phe and biomass!!
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

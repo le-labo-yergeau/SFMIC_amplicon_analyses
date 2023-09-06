@@ -1,0 +1,211 @@
+---
+title: "RDA Gram Positive"
+format:
+  html:
+    theme: spacelab
+    toc: true
+    number-sections: true
+    digits: 3
+---
+
+
+```{r}
+pacman::p_load(pacman, here, BiodiversityR, tictoc, tidyverse, V8)
+```
+
+# Load data for RDA gp      
+
+## Metadata
+### Load Metadata - plant morphology - phenanthrene - qPCR
+```{r Metadata - data sets loading}
+meta.morpho.phe <- read.csv(file = here::here("data","meta.otu.june2020.txt"), dec = ".", header = T, sep = "\t", comment.char = "", row.names = 1) #load
+# Upper case rownames 
+rownames(meta.morpho.phe) <- toupper(rownames(meta.morpho.phe))
+#meta.morpho.phe$code <- stringr::str_replace_all(meta.morpho.phe$code, '[_]', '.')
+meta.morpho.phe.b.keep <- meta.morpho.phe$compartment == "bulk"
+meta.morpho.phe.r.keep <- meta.morpho.phe$compartment == "rhizo"
+meta.morpho.phe.b <- meta.morpho.phe[meta.morpho.phe.b.keep,]
+meta.morpho.phe.r <- meta.morpho.phe[meta.morpho.phe.r.keep,]
+meta.morpho.phe <- rbind(meta.morpho.phe.b,meta.morpho.phe.r) # keep only bulk and rhizosphere samples
+```
+
+### Recode variables
+```{r Metadata - recode}
+meta.morpho.phe$contamination <- as.factor(meta.morpho.phe$contamination)
+meta.morpho.phe$compartment <- as.factor(meta.morpho.phe$compartment)
+meta.morpho.phe$diversity_status <- as.factor(meta.morpho.phe$diversity_status)
+meta.morpho.phe$diversity_status = factor(meta.morpho.phe$diversity_status, 
+                                      levels = c("O", "C", "N", "E", "CN", "CE", "EN", "CEN"),
+                                      labels = c("BF", "C", "N", "E", "CN", "CE", "EN", "CEN"))
+```
+
+### Keep only needed variables for the rda
+```{r Metadata - keep variables}
+meta.morpho.phe$ver <- NULL
+meta.morpho.phe$col <- NULL
+meta.morpho.phe$nem <- NULL
+meta.morpho.phe$treatment <- NULL
+meta.morpho.phe$cont.comp <- NULL
+meta.morpho.phe$block <- NULL
+meta.morpho.phe$pot.number <- NULL
+meta.morpho.phe$pah.rhd.gp.c <- NULL
+meta.morpho.phe$pah.rhd.gn.c <- NULL
+meta.morpho.phe$branch <- NULL
+meta.morpho.phe$fw_aerial = NULL
+meta.morpho.phe$dw_aerial = NULL
+meta.morpho.phe$dw_root = NULL
+meta.morpho.phe$RSR = NULL
+meta.morpho.phe$height = NULL
+meta.morpho.phe$phe.b = NULL
+meta.morpho.phe$phe.r = NULL
+meta.morpho.phe$phe.total = NULL
+meta.morpho.phe$pah.rhd.gp.b = NULL
+meta.morpho.phe$pah.rhd.gp.r = NULL
+meta.morpho.phe$pah.rhd.gn.b = NULL
+meta.morpho.phe$pah.rhd.gn.r = NULL
+```
+
+### Tidy up
+```{r Metadata - tidy up}
+rm(meta.morpho.phe.b)
+rm(meta.morpho.phe.r)
+rm(meta.morpho.phe.b.keep)
+rm(meta.morpho.phe.r.keep)
+```
+
+### Filter out incomplete cases
+```{r filter out incomplete cases}
+meta.morpho.phe <- meta.morpho.phe[complete.cases(meta.morpho.phe), ] # Down from 192 to 188 cases #188?
+```
+
+### Test for autocorrelation of variables
+```{r autocorrelations}
+autocorrelations =  (cor(meta.morpho.phe[, c( 'biomass', 'phe', 'gp.copies.g.soil', 'gp.copies.g.soil')], method = "spearman"))
+
+model = lm(phe ~ biomass, data = meta.morpho.phe)
+anova(model)
+summary(model)
+```
+
+## gp
+
+```{r gp - data sets loading}
+#### ----------------- gp - General community --------------------------------- 
+rawgp <- read.csv(file = here::here("data", "gp_br_otu_table_filtered.txt"), dec = ".", sep = "\t", header = T, row.names = 1, comment.char = "")
+```
+
+### Recode community
+```{r gp - recode community}
+samplenames <- colnames(rawgp) #  sample names to be changed
+goodsamplenames <- samplenames %-% '[X]'# erase the X added by R 
+goodsamplenames <- stringr::str_replace_all(goodsamplenames, '_GP', '') # remove specific string of characters _gp
+goodsamplenames <- stringr::str_replace_all(goodsamplenames, '[.]', '_') # remove all dots and substitute by _
+goodsamplenames # check did it work?
+colnames(rawgp) <- goodsamplenames #change old colnames for good colnames
+dim(rawgp) #check dimensions: 6415 obs of 193 variables
+```
+
+### Tidy up
+```{r gp - Tidy intermediate objs}
+rm(goodsamplenames)
+rm(samplenames) # erases junk intermediate data to prevent future problems
+```
+
+# Curing community
+## Taxonomy table
+### Select taxonomy column
+```{r gp - Curing taxonomy data tables}
+taxonomy.gp <- as.data.frame(rawgp[,ncol(rawgp)]) # taxonomy from last column as independent table
+rownames(taxonomy.gp) <- rownames((rawgp)) # keep ASV numbers
+check.datasets(taxonomy.gp, rawgp) # Check if numbers the same
+rownames(rawgp) <- paste("ASV",rownames(rawgp),sep = "_")# modify ASV names
+rownames(taxonomy.gp) <- paste("ASV",rownames(taxonomy.gp),sep = "_") # modify ASV names
+check.datasets(taxonomy.gp, rawgp) # Check if numbers the same
+```
+
+### Separate taxonomic levels in taxonomy table
+```{r gp - Curing taxonomy data tables}
+colnames(taxonomy.gp) <- c("Taxonomy") # Rename taxonomy column
+# separate taxonomic groups in variables ----
+tax.clean <- separate(taxonomy.gp, Taxonomy, into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species", "Strain"), sep = ";")
+tax.clean <- tax.clean[,-which(names(tax.clean) %in% c("Species", "Strain"))]
+tax.clean <- as.data.frame(tax.clean)
+as.factor(tax.clean$Domain) # 2 Domain - Bacteria Eukarya --> there is contamination with chloroplast
+as.factor(tax.clean$Phylum) # 10 Phyla: Deinnococcus-Thermus, Firmicutes and Proteobacteria
+as.factor(tax.clean$Class) # 16 classes: Alphaproteobacteria, Bacilli, Betaproteobacteria, Deinococci and Gammaproteobacteria
+as.factor(tax.clean$Order) # 32 orders
+as.factor(tax.clean$Family) # 46 Families
+as.factor(tax.clean$Genus) # 68 genus
+str(tax.clean)
+```
+
+
+### Eliminate uninformative characters
+```{r gp - Curing taxonomy data tables}
+# eliminate the characters one by one or all using stringr package -----
+tax.clean$Domain <- stringr::str_replace(tax.clean$Domain,'[k]', '')
+tax.clean$Domain <- stringr::str_replace_all(tax.clean$Domain,'[__]', '')
+tax.clean$Phylum <- stringr::str_replace(tax.clean$Phylum,'[p__]', '')
+tax.clean$Phylum <- stringr::str_replace_all(tax.clean$Phylum,'[__]', '')
+tax.clean$Class <- stringr::str_replace(tax.clean$Class,'[c__]', '')
+tax.clean$Class <- stringr::str_replace_all(tax.clean$Class,'[__]', '')
+tax.clean$Order <- stringr::str_replace(tax.clean$Order, '[o]', '')
+tax.clean$Order <- stringr::str_replace_all(tax.clean$Order, '[__]', '')
+tax.clean$Family <- stringr::str_replace(tax.clean$Family, '[f]', '')
+tax.clean$Family <- stringr::str_replace_all(tax.clean$Family, '[__]', '')
+tax.clean$Genus <- stringr::str_replace(tax.clean$Genus, '[g]','')
+tax.clean$Genus <- stringr::str_replace_all(tax.clean$Genus, '[__]', '')
+str(tax.clean)
+```
+
+### Collate clean tax to community
+```{r gp - Curing taxonomy data tables}
+# collate otus with clean taxonomy table
+rawgp_bis <- cbind(rawgp[,1:(ncol(rawgp)-1)], tax.clean) # select all columns except last one with unclean tax
+# tyding up
+rm(taxonomy.gp)
+```
+
+## Community  matrix
+
+### Keep only bacteria
+```{r}
+tax.clean$Domain = as.factor(tax.clean$Domain)
+levels(tax.clean$Domain)
+rawgp.bacteria = rawgp[!grepl("Eukaryota", rawgp$taxonomy),]
+rawgp_bis = rawgp_bis[!grepl("Eukaryota", rawgp_bis$Domain),]
+```
+
+
+### Transpose community matrix
+```{r gp -  Preparing  abundance matrix, ordering tables}
+comgp <- rawgp.bacteria[,!names(rawgp.bacteria) %in% c('taxonomy')] # create community table with asv table with only abundances not taxonomy
+comgp.t <- t(comgp) # transposing table, samples as rows, species as columns to match metadata
+```
+### Inner-join with meta.morpho.phe
+Keep community samples that match environmental samples
+```{r}
+comgp.t.filtered <- same.sites(comgp.t, meta.morpho.phe) #No resulting sites without species.  
+check.datasets(comgp.t.filtered, meta.morpho.phe) # check row names are the same
+```
+
+
+# RDA steps
+## Standardize 
+```{r}
+meta.z = meta.morpho.phe |> mutate_if(is.numeric,scale)
+```
+
+## Run RDA model
+```{r}
+#db-RDA Function dbrda does not provide species weights because it uses a distance matrix
+comgp.bray = vegdist(comgp.t.filtered, method = 'bray') # use comgp.t.filtered instead of comgp.hell to match data in PCoA and perMANOVA.
+dbrda.gp = dbrda(comgp.bray ~ contamination + compartment + diversity_status + biomass + phe + gp.copies.g.soil + gp.copies.g.soil, data = meta.z, 
+               scaling = "species")
+RsquareAdj(dbrda.gp)
+anova.rda.gp = anova.cca(dbrda.gp, step = 999, by = "term")
+anova.rda.gp
+capture.output(anova.rda.gp, file = here::here("output", "tables", "gp", "anova-dbrda-gp.txt"))
+capture.output(summary(dbrda.gp), file = here::here("output", "tables", "gp", "summary-dbrda-gp.txt"))
+#summary(dbrda.gp)
+```
